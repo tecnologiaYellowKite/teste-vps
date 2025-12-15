@@ -1,0 +1,63 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'feat/**'
+      - 'feature/**'
+      - 'fix/**'
+      - 'bugfix/**'
+      - 'hotfix/**'
+
+env:
+  PROJECT_NAME: "teste-vps"
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: Set Environment Variables
+        id: env
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "ENVIRONMENT=prod" >> $GITHUB_ENV
+            echo "CONTAINER_NAME=${{ env.PROJECT_NAME }}-prod" >> $GITHUB_ENV
+            echo "IMAGE_NAME=${{ env.PROJECT_NAME }}:prod-${{ github.sha }}" >> $GITHUB_ENV
+          else
+            echo "ENVIRONMENT=test" >> $GITHUB_ENV
+            echo "CONTAINER_NAME=${{ env.PROJECT_NAME }}-test" >> $GITHUB_ENV
+            echo "IMAGE_NAME=${{ env.PROJECT_NAME }}:test-${{ github.sha }}" >> $GITHUB_ENV
+          fi
+      
+      - name: Build Docker Image
+        run: |
+          docker build             --build-arg NODE_ENV=production             -t ${{ env.IMAGE_NAME }}             .
+      
+      - name: Stop Old Container
+        run: |
+          docker stop ${{ env.CONTAINER_NAME }} || true
+          docker rm ${{ env.CONTAINER_NAME }} || true
+      
+      - name: Start New Container
+        run: |
+          docker run -d             --name ${{ env.CONTAINER_NAME }}             --network ${{ secrets.NPM_NETWORK }}             --restart unless-stopped             -e NODE_ENV=production             ${{ env.IMAGE_NAME }}
+      
+      - name: Health Check
+        run: |
+          sleep 10
+          if docker ps | grep -q ${{ env.CONTAINER_NAME }}; then
+            echo "Deploy successful"
+          else
+            echo "Deploy failed"
+            exit 1
+          fi
+      
+      - name: Cleanup Old Images
+        run: |
+          docker images --filter=reference="${{ env.PROJECT_NAME }}"             --format "{{.ID}} {{.Tag}}" |             grep -v "${{ github.sha }}" |             awk '{print $1}' |             xargs -r docker rmi -f || true
